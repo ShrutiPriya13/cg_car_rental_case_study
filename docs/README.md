@@ -209,12 +209,10 @@ This project was developed collaboratively by **7 developers**, each responsible
 | Developer | Responsibility |
 |---------|----------------|
 | Developer 1 | Dataset generation & ingestion |
-| Developer 2 | Data cleaning module |
-| Developer 3 | Validation rules implementation |
-| Developer 4 | Deduplication logic |
-| Developer 5 | Fraud detection system |
-| Developer 6 | Data transformation & analytics |
-| Developer 7 | SQL database design & analytical queries |
+| Developer 2 & 3 | Data cleaning module |
+| Developer 4 | Validation rules implementation |
+| Developer 5 | Deduplication logic |
+| Developer 6 & 7 | Data transformation & analytics|
 
 ---
 

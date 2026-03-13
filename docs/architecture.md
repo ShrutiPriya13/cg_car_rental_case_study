@@ -6,7 +6,7 @@
 ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
 │   RAW DATA   │───▶│   CLEANING   │───▶│  VALIDATION  │
 │  Generation  │    │   Module     │    │   Module     │
-│ (Dev 1)      │    │ (Dev 2)      │    │ (Dev 3)      │
+│ (Dev 1)      │    │ (Dev 2 & 3)  │    │ (Dev 4)      │
 └──────────────┘    └──────────────┘    └──────┬───────┘
                                                │
                                     ┌──────────┴──────────┐
@@ -20,14 +20,14 @@
                               ┌───────────┐        rejected_
                               │ DEDUP &   │        reservations.csv
                               │ FRAUD     │
-                              │ (Dev 4)   │
+                              │ (Dev 5)   │
                               └─────┬─────┘
                                     │
                                     ▼
                               ┌───────────┐
-                              │ ANALYTICS │
+                              │ TRANSFORM │
                               │ & KPIs    │
-                              │ (Dev 5)   │
+                              │ (Dev 6 & 7)│
                               └─────┬─────┘
                                     │
                           ┌─────────┼─────────┐
@@ -36,58 +36,330 @@
                     reserv..   report.csv  Summary
 ```
 
-## Module Responsibilities
+---
 
-### Developer 1: Ingestion (`src/ingestion/`)
-- **dataset_generator.py**: Generates ~2000 realistic records with intentional data quality issues. Uses configurable random seed for reproducibility. Produces messy Vehicle IDs, mixed timestamp formats, odometer values with units, fuel in percent/fraction, rates with currency symbols, city abbreviations, payment case variations, duplicate records, and negative mileage cases.
-- **reader.py**: Generic CSV reader/writer using Python's `csv.DictReader`. Handles file I/O, directory creation, and encoding.
+# Module Responsibilities
 
-### Developer 2: Cleaning (`src/cleaning/`)
-- **cleaner.py**: Field-level cleaning functions:
-  - `clean_vehicle_id()`: Trims whitespace, converts to uppercase
-  - `clean_timestamp()`: Fixes invalid minutes (carry-over arithmetic), tries multiple parse formats, outputs `YYYY-MM-DD HH:MM`
-  - `clean_odometer()`: Strips units ("km"), removes commas, converts to integer
-  - `clean_fuel_level()`: Converts percent to fraction (50% → 0.50)
-  - `clean_rate()`: Removes ₹, /day, commas; converts to integer
-  - `clean_city()`: Maps abbreviations to canonical names using lookup dict
-  - `clean_payment()`: Normalizes to uppercase, validates against allowed set
+## Developer 1: Ingestion (`src/ingestion/`)
 
-### Developer 3: Validation (`src/validation/`)
-- **validator.py**: Rule-based validation:
-  - Return timestamp must be after pickup timestamp
-  - Odo_End must be ≥ Odo_Start
-  - Fuel level must be in [0, 1]
-  - Payment must be one of: UPI, CARD, CASH, WALLET
-  - Required fields must not be null
-  - Invalid records are tagged with rejection reasons
+### `dataset_generator.py`
+Generates **~2000 realistic car rental records** with intentional data quality issues to simulate real-world datasets.
 
-### Developer 4: Processing (`src/processing/`)
-- **deduplicator.py**: Deduplication and fraud detection:
-  - Removes duplicates by Reservation_ID (keeps first)
-  - Detects overlapping bookings for the same vehicle
-  - Detects odometer rollback across sequential bookings
-  - Computes fraud risk score (0-8) based on: short rental + long distance (+3), overlapping booking (+2), odometer rollback (+3)
-  - Assigns risk levels: None, Low, Medium, High
+Data issues generated include:
 
-### Developer 5: Analytics (`src/analytics/`)
-- **transformer.py**: KPI computation:
-  - Per-record: Distance_km, Rental_Hours, Revenue, Cost_per_km
-  - Aggregate: Fleet utilization by vehicle, revenue by city, average duration, vehicle usage frequency, fraud risk distribution
+- Vehicle IDs with extra spaces and mixed casing
+- Mixed timestamp formats
+- Odometer values containing commas and units (`45,000 km`)
+- Fuel levels in both **percentage and fractional formats**
+- Rental rates with **currency symbols and text**
+- City abbreviations (`blr`, `hyd`, `mum`)
+- Payment method case inconsistencies (`upi`, `Card`)
+- Duplicate reservation IDs
+- Negative mileage scenarios
 
-### Developer 6: SQL Analytics (`sql/`)
-- **schema.sql**: 6-table relational schema (CUSTOMERS, VEHICLES, RESERVATIONS, PAYMENTS, MAINTENANCE, LOCATIONS)
-- **inserts.sql**: 10+ sample records per table
-- **solutions.sql**: 12 advanced queries using JOINs, GROUP BY, window functions (RANK, LAG, SUM OVER), CTEs, and CASE expressions
+Uses a **fixed random seed** to ensure reproducible dataset generation.
 
-## Data Flow
-1. Raw CSV (2080 records, messy) → Cleaning → 2080 cleaned records
-2. Cleaned → Validation → Valid + Rejected split
-3. Valid → Deduplication → ~1920 unique records with fraud scores
-4. Unique → Analytics → Enriched records with KPIs
-5. Output: 3 CSV files + terminal summary
+### `reader.py`
 
-## Design Decisions
-- **No external dependencies**: Uses only Python standard library (csv, datetime, re, os, sys, random, collections)
-- **Dictionary-based records**: Simple and portable without requiring pandas/numpy
-- **Modular pipeline**: Each stage is independently testable and replaceable
-- **Deterministic output**: Random seed ensures reproducible dataset generation
+Handles CSV file input/output operations using Python's built-in `csv` module.
+
+Responsibilities:
+
+- Read raw dataset using `csv.DictReader`
+- Write cleaned and processed datasets
+- Handle directory creation for output folders
+- Manage encoding and file safety
+
+---
+
+# Developer 2 & 3: Data Cleaning (`src/cleaning/`)
+
+### `cleaner.py`
+
+Performs **field-level data cleaning and normalization**.
+
+Key cleaning functions include:
+
+#### `clean_vehicle_id()`
+- Removes extra whitespace
+- Converts IDs to uppercase
+- Ensures consistent vehicle ID formatting
+
+#### `clean_timestamp()`
+- Handles multiple timestamp formats
+- Fixes invalid time values (e.g., `10:75`)
+- Converts to standardized format:
+
+```
+YYYY-MM-DD HH:MM
+```
+
+#### `clean_odometer()`
+- Removes units like `"km"`
+- Removes commas from values
+- Converts values to integers
+
+Example:
+
+```
+"45,000 km" → 45000
+```
+
+#### `clean_fuel_level()`
+- Converts percentages to fractions
+
+Example:
+
+```
+50% → 0.50
+```
+
+#### `clean_rate()`
+- Removes `₹`, `/day`, commas
+- Converts to numeric value
+
+Example:
+
+```
+₹1,500/day → 1500
+```
+
+#### `clean_city()`
+Maps city abbreviations to standardized names using a lookup dictionary.
+
+Example:
+
+```
+blr → Bengaluru
+hyd → Hyderabad
+mum → Mumbai
+```
+
+#### `clean_payment()`
+- Converts to uppercase
+- Ensures consistency across payment types
+
+---
+
+# Developer 4: Validation (`src/validation/`)
+
+### `validator.py`
+
+Implements **rule-based validation checks** to ensure business logic consistency.
+
+Validation rules include:
+
+- Pickup timestamp must be **before** return timestamp
+- `Odo_End ≥ Odo_Start`
+- Fuel level must be between **0 and 1**
+- Payment method must be one of:
+
+```
+UPI, CARD, CASH, WALLET
+```
+
+- Required fields must not be null or missing
+
+Invalid records are **flagged with rejection reasons** and separated into a rejected dataset.
+
+---
+
+# Developer 5: Deduplication & Fraud Detection (`src/processing/`)
+
+### `deduplicator.py`
+
+Handles **duplicate removal and fraud pattern detection**.
+
+Key features include:
+
+### Deduplication
+- Removes duplicate records using **Reservation_ID**
+- Keeps the **first valid occurrence**
+
+### Fraud Detection
+Detects suspicious patterns such as:
+
+- **Overlapping bookings** for the same vehicle
+- **Odometer rollback** between bookings
+- **Unrealistic travel distance within short rentals**
+
+### Fraud Risk Score
+
+Risk scores are calculated between **0 and 8** based on:
+
+| Condition | Score |
+|--------|------|
+| Short rental with large distance | +3 |
+| Overlapping booking | +2 |
+| Odometer rollback | +3 |
+
+Risk categories:
+
+- **None**
+- **Low**
+- **Medium**
+- **High**
+
+---
+
+# Developer 6 & 7: Data Transformation & Analytics (`src/analytics/`)
+
+### `transformer.py`
+
+Computes **key business KPIs and analytics metrics**.
+
+Per-record metrics:
+
+| Metric | Description |
+|------|-------------|
+| Distance_km | `Odo_End − Odo_Start` |
+| Rental_Hours | Total rental duration |
+| Revenue | Rental rate × duration |
+| Cost_per_km | Revenue ÷ distance |
+
+Aggregate analytics:
+
+- Fleet utilization by vehicle
+- Revenue by city
+- Average rental duration
+- Vehicle usage frequency
+- Fraud risk distribution
+
+These transformations produce the **final analytics-ready dataset**.
+
+---
+
+# Developer 6: SQL Analytics (`sql/`)
+
+### `schema.sql`
+
+Defines the relational database schema including:
+
+- `CUSTOMERS`
+- `VEHICLES`
+- `RESERVATIONS`
+- `PAYMENTS`
+- `MAINTENANCE`
+- `LOCATIONS`
+
+### `inserts.sql`
+
+Contains **sample data entries** for testing the schema.
+
+### `solutions.sql`
+
+Includes **advanced analytical SQL queries** using:
+
+- `JOIN`
+- `GROUP BY`
+- Window functions (`RANK`, `LAG`, `SUM OVER`)
+- `CTE`
+- `CASE` expressions
+
+Example insights generated:
+
+- Top performing cities
+- Vehicle utilization ranking
+- Revenue trends
+- Fraud pattern identification
+
+---
+
+# Data Flow
+
+1️⃣ **Raw Dataset Generation**
+
+```
+2080 messy records
+```
+
+⬇
+
+2️⃣ **Cleaning Stage**
+
+```
+Standardized 2080 cleaned records
+```
+
+⬇
+
+3️⃣ **Validation Stage**
+
+```
+Valid Records + Rejected Records
+```
+
+⬇
+
+4️⃣ **Deduplication**
+
+```
+~1920 unique reservations
+```
+
+⬇
+
+5️⃣ **Transformation & Analytics**
+
+```
+Enriched dataset with KPIs
+```
+
+⬇
+
+6️⃣ **Output Files**
+
+- `cleaned_reservations.csv`
+- `rejected_reservations.csv`
+- `metrics_report.csv`
+
+---
+
+# Design Decisions
+
+### No External Dependencies
+
+The system uses only **Python Standard Library** modules:
+
+```
+csv
+datetime
+re
+os
+sys
+random
+collections
+```
+
+This ensures **maximum portability and simplicity**.
+
+---
+
+### Dictionary-Based Data Processing
+
+Records are processed using **Python dictionaries**, avoiding the need for external libraries such as:
+
+- pandas
+- numpy
+
+This keeps the pipeline **lightweight and easy to understand**.
+
+---
+
+### Modular Architecture
+
+Each stage of the pipeline is implemented as an **independent module**, enabling:
+
+- Easier testing
+- Code maintainability
+- Independent development by multiple developers
+
+---
+
+### Deterministic Dataset Generation
+
+A **fixed random seed** ensures:
+
+- Reproducible datasets
+- Consistent results across runs
+- Reliable debugging and evaluation
